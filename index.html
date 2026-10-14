@@ -114,9 +114,7 @@ function status(message) {
 }
 
 function connect() {
-  socket = io(SERVER, {
-    transports: ["websocket", "polling"]
-  });
+    socket = io(SERVER);
 
   socket.on("connect", () => {
     status("Server connected ✅");
