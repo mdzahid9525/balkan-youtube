@@ -1,0 +1,11 @@
+{
+  "name": "BalkanYouTube",
+  "short_name": "BalkanYT",
+  "description": "Watch YouTube videos together with friends",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": []
+}
