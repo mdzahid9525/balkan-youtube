@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BalkanYouTube</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: #10131a;
+  color: white;
+  font-family: Arial, sans-serif;
+}
+
+h1 {
+  color: #ff4545;
+  text-align: center;
+}
+
+.card {
+  background: #1c2230;
+  padding: 18px;
+  border-radius: 14px;
+  margin: 18px 0;
+}
+
+input, button {
+  width: 100%;
+  padding: 13px;
+  margin-top: 10px;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+input {
+  background: #10131a;
+  color: white;
+  border: 1px solid #555;
+}
+
+button {
+  border: none;
+  background: #ff4545;
+  color: white;
+  font-weight: bold;
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+#player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: 15px;
+}
+
+#status {
+  color: #7dffab;
+  overflow-wrap: anywhere;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🎬 BalkanYouTube</h1>
+<p style="text-align:center">Watch Together</p>
+
+<div class="card">
+  <h3>🏠 Create Room</h3>
+  <button id="createBtn">Create Room</button>
+
+  <h3>🔑 Join Room</h3>
+  <input id="roomInput" placeholder="Enter Room Code">
+  <button id="joinBtn">Join Room</button>
+
+  <p id="roomInfo">Room: Not connected</p>
+  <p id="status">Connecting to server...</p>
+</div>
+
+<div class="card">
+  <h3>▶️ YouTube Video</h3>
+  <input id="videoInput" placeholder="Paste YouTube video URL">
+  <button id="loadBtn">Load Video</button>
+
+  <div id="player"></div>
+  <button id="playBtn" disabled>Play / Pause Sync</button>
+</div>
+
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<script>
+const SERVER = "https://balkan-youtube.onrender.com";
+
+let socket;
+let roomCode = "";
+let player;
+let playerReady = false;
+let applyingRemote = false;
+let syncTimer;
+
+const statusEl = document.getElementById("status");
+
+function status(message) {
+  statusEl.textContent = message;
+}
+
+function connect() {
+  socket = io(SERVER, {
+    transports: ["websocket", "polling"]
+  });
+
+  socket.on("connect", () => {
+    status("Server connected ✅");
+  });
+
+  socket.on("connect_error", () => {
+    status("Connection error. Please retry.");
+  });
+
+  socket.on("disconnect", () => {
+    status("Disconnected from server");
+  });
+
+  socket.on("member-joined", () => {
+    status("A member joined the room");
+  });
+
+  socket.on("playback-update", data => {
+    if (!playerReady || data.roomCode !== roomCode) return;
+
+    applyingRemote = true;
+
+    if (data.videoId && data.videoId !== player.getVideoData().video_id) {
+      player.loadVideoById(data.videoId, data.position || 0);
+    } else {
+      const current = player.getCurrentTime() || 0;
+      const target = Number(data.position) || 0;
+
+      if (Math.abs(current - target) > 2) {
+        player.seekTo(target, true);
+      }
+
+      if (data.playing) {
+        player.playVideo();
+      } else {
+        player.pauseVideo();
+      }
+    }
+
+    setTimeout(() => applyingRemote = false, 1200);
+  });
+}
+
+function createRoom() {
+  if (!socket || !socket.connected) {
+    status("Server connect hone ka wait karo");
+    return;
+  }
+
+  socket.emit("create-room", result => {
+    if (!result || !result.ok) {
+      status("Room create nahi hua");
+      return;
+    }
+
+    roomCode = String(result.roomCode);
+    document.getElementById("roomInfo").textContent =
+      "Room Code: " + roomCode;
+
+    status("Room created ✅ Code friend ko bhejo");
+  });
+}
+
+function joinRoom() {
+  if (!socket || !socket.connected) {
+    status("Server connect hone ka wait karo");
+    return;
+  }
+
+  const code = document.getElementById("roomInput").value.trim();
+
+  if (!code) {
+    status("Room Code enter karo");
+    return;
+  }
+
+  socket.emit("join-room", { roomCode: code }, result => {
+    if (!result || !result.ok) {
+      status("Room nahi mila. Code check karo.");
+      return;
+    }
+
+    roomCode = code;
+    document.getElementById("roomInfo").textContent =
+      "Room Code: " + roomCode;
+
+    status("Room joined successfully ✅");
+  });
+}
+
+function onYouTubeIframeAPIReady() {
+  player = new YT.Player("player", {
+    width: "100%",
+    height: "100%",
+    videoId: "",
+    events: {
+      onReady: () => {
+        playerReady = true;
+        document.getElementById("playBtn").disabled = false;
+      },
+      onStateChange: event => {
+        if (applyingRemote || !roomCode) return;
+
+        if (
+          event.data === YT.PlayerState.PLAYING ||
+          event.data === YT.PlayerState.PAUSED
+        ) {
+          sendPlayback();
+        }
+      }
+    }
+  });
+}
+
+function getVideoId(url) {
+  try {
+    const parsed = new URL(url);
+
+    if (parsed.hostname === "youtu.be") {
+      return parsed.pathname.slice(1);
+    }
+
+    if (
+      parsed.hostname.endsWith("youtube.com") ||
+      parsed.hostname.endsWith("youtube-nocookie.com")
+    ) {
+      if (parsed.pathname === "/watch") {
+        return parsed.searchParams.get("v");
+      }
+
+      const parts = parsed.pathname.split("/");
+
+      if (["embed", "shorts", "live"].includes(parts[1])) {
+        return parts[2];
+      }
+    }
+  } catch (error) {}
+
+  return null;
+}
+
+function loadVideo() {
+  if (!playerReady) {
+    status("Player load ho raha hai");
+    return;
+  }
+
+  const id = getVideoId(
+    document.getElementById("videoInput").value.trim()
+  );
+
+  if (!id) {
+    status("Valid YouTube URL paste karo");
+    return;
+  }
+
+  player.loadVideoById(id);
+}
+
+function sendPlayback() {
+  if (!socket || !socket.connected || !roomCode || !playerReady) {
+    return;
+  }
+
+  socket.emit("playback-update", {
+    roomCode: roomCode,
+    playing: player.getPlayerState() === YT.PlayerState.PLAYING,
+    position: player.getCurrentTime() || 0,
+    videoId: player.getVideoData().video_id
+  });
+}
+
+document.getElementById("createBtn").onclick = createRoom;
+document.getElementById("joinBtn").onclick = joinRoom;
+document.getElementById("loadBtn").onclick = loadVideo;
+
+document.getElementById("playBtn").onclick = () => {
+  if (!playerReady) return;
+
+  if (player.getPlayerState() === YT.PlayerState.PLAYING) {
+    player.pauseVideo();
+  } else {
+    player.playVideo();
+  }
+};
+
+syncTimer = setInterval(() => {
+  if (playerReady && roomCode && !applyingRemote) {
+    sendPlayback();
+  }
+}, 2000);
+
+connect();
+</script>
+
+</body>
+</html>
